@@ -1,27 +1,87 @@
 import { useState, useEffect, useCallback } from "react";
 
-// ─── Backend Config ───────────────────────────────────────────────
+// ─── Supabase Config ──────────────────────────────────────────────
+const SUPABASE_URL = "https://cooehepjydlbarukbsgy.supabase.co";
+const SUPABASE_KEY = "sb_publishable_lbrnoAXc4aFXkhBvcAyCBg_6GON4YoO";
+
+const sb = async (path, opts={}) => {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    ...opts,
+    headers: {
+      "apikey": SUPABASE_KEY,
+      "Authorization": `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      "Prefer": opts.prefer || "",
+      ...(opts.headers||{}),
+    },
+  });
+  if (res.status === 204) return null;
+  return res.json();
+};
+
+// ─── AppData (history, pending, reclamaciones, etc.) ─────────────
+const saveAppData = async (key, data) => {
+  await sb(`app_data?key=eq.${key}`, {
+    method: "DELETE",
+    prefer: "return=minimal",
+  });
+  await sb("app_data", {
+    method: "POST",
+    prefer: "return=minimal",
+    body: JSON.stringify({ key, data }),
+  });
+};
+
+const loadAppData = async (key) => {
+  const rows = await sb(`app_data?key=eq.${key}&select=data`);
+  if (!rows || !rows.length) return null;
+  return rows[0].data;
+};
+
+// ─── Colores ──────────────────────────────────────────────────────
+const saveColorsToSheet = async (colors) => {
+  await sb("colors", { method: "DELETE", prefer: "return=minimal" });
+  if (colors.length > 0) {
+    await sb("colors", {
+      method: "POST",
+      prefer: "return=minimal",
+      body: JSON.stringify(colors),
+    });
+  }
+};
+
+const loadColorsFromSheet = async () => {
+  const rows = await sb("colors?select=*&order=serie,color");
+  if (!rows || !rows.length) return null;
+  return rows;
+};
+
+// ─── Formatos ─────────────────────────────────────────────────────
+const saveFormatsToSheet = async (formats) => {
+  await sb("formats", { method: "DELETE", prefer: "return=minimal" });
+  if (formats.length > 0) {
+    await sb("formats", {
+      method: "POST",
+      prefer: "return=minimal",
+      body: JSON.stringify(formats),
+    });
+  }
+};
+
+const loadFormatsFromSheet = async () => {
+  const rows = await sb("formats?select=*&order=largo.desc,ancho.desc");
+  if (!rows || !rows.length) return null;
+  return rows;
+};
+
+// ─── Google Drive (fotos) via Apps Script ─────────────────────────
 const BACKEND = "https://script.google.com/macros/s/AKfycbw7IhJ6sg_Qm27O-6mU8CAvmNLA95ICP5Mm4EFQjsiGnemLnkkPx7dR6lgO55dSZDZfbw/exec";
 
-const api = async (body) => {
+const driveApi = async (body) => {
   const url = `${BACKEND}?payload=${encodeURIComponent(JSON.stringify(body))}`;
   const res = await fetch(url);
   return res.json();
 };
-
-const apiGet = async (params) => {
-  const qs  = new URLSearchParams(params).toString();
-  const res = await fetch(`${BACKEND}?${qs}`);
-  return res.json();
-};
-
-// ─── Helpers de datos ─────────────────────────────────────────────
-const saveAppData       = (key, data)    => api({ action:"saveData", key, data });
-const loadAppData       = (key)          => apiGet({ action:"loadData", key }).then(r=>r.data);
-const saveColorsToSheet = (colors)       => api({ action:"saveColors", data:colors });
-const loadColorsFromSheet = ()           => apiGet({ action:"loadColors" }).then(r=>r.data);
-const saveFormatsToSheet  = (formats)    => api({ action:"saveFormats", data:formats });
-const loadFormatsFromSheet = ()          => apiGet({ action:"loadFormats" }).then(r=>r.data);
 
 // ─── Conversión control → fila Sheets ────────────────────────────
 const resolveAnchoForSheet = (tile, fmt) => {
@@ -71,7 +131,7 @@ const ctrlToRow = (ctrl, formats, colors, driveFolderUrl) => {
   return row;
 };
 
-// ─── Sync control con backend ─────────────────────────────────────
+// ─── Sync control ─────────────────────────────────────────────────
 const toBase64 = async (dataUrl) => {
   const parts = dataUrl.split(",");
   return { base64: parts[1], mimeType: parts[0].match(/:(.*?);/)[1] };
@@ -81,19 +141,19 @@ const syncCtrl = async (ctrl, formats, colors) => {
   const color     = colors.find(c => c.id === ctrl.colorId);
   const colorName = color ? `${color.serie} ${color.color}` : "Sin color";
 
-  // Subir fotos nuevas a la carpeta del color
+  // Subir fotos nuevas a Drive
   for (const tile of (ctrl.tiles||[])) {
     for (const foto of (tile.fotos||[])) {
       if (!foto.uploaded && foto.src?.startsWith("data:")) {
         const { base64, mimeType } = await toBase64(foto.src);
-        await api({ action:"uploadPhoto", name:foto.name||`foto_${Date.now()}.jpg`, base64, mimeType, colorName });
+        await driveApi({ action:"uploadPhoto", name:foto.name||`foto_${Date.now()}.jpg`, base64, mimeType, colorName });
       }
     }
   }
 
-  // Guardar fila legible en Sheets
+  // Guardar fila legible en Google Sheets via Apps Script
   const row = ctrlToRow(ctrl, formats, colors, "");
-  await api({ action:"saveCtrlRow", data:row });
+  await driveApi({ action:"saveCtrlRow", data:row });
 
   return "";
 };
