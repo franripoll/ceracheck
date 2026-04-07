@@ -83,6 +83,15 @@ const driveApi = async (body) => {
   return res.json();
 };
 
+const driveApiPost = async (body) => {
+  const res = await fetch(BACKEND, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: "payload=" + encodeURIComponent(JSON.stringify(body)),
+  });
+  return res.json();
+};
+
 // ─── Conversión control → fila Sheets ────────────────────────────
 const resolveAnchoForSheet = (tile, fmt) => {
   if (!tile.anchoOpt || tile.anchoOpt==="") return "";
@@ -146,7 +155,7 @@ const syncCtrl = async (ctrl, formats, colors) => {
     for (const foto of (tile.fotos||[])) {
       if (!foto.uploaded && foto.src?.startsWith("data:")) {
         const { base64, mimeType } = await toBase64(foto.src);
-        await driveApi({ action:"uploadPhoto", name:foto.name||`foto_${Date.now()}.jpg`, base64, mimeType, colorName });
+        await driveApiPost({ action:"uploadPhoto", name:foto.name||`foto_${Date.now()}.jpg`, base64, mimeType, colorName });
       }
     }
   }
