@@ -74,21 +74,79 @@ const loadFormatsFromSheet = async () => {
   return rows;
 };
 
-// ─── Google Drive (fotos) via Apps Script ─────────────────────────
+// ─── Google OAuth para Drive ──────────────────────────────────────
+const G_CLIENT_ID = "624082917141-18mp6bl25886k1044ucuadcqjind99j5.apps.googleusercontent.com";
+const G_SCOPES    = "https://www.googleapis.com/auth/drive.file";
+const G_FOLDER_ID = "1EpR84ksRpVYaI5TwuTp6ZFTnz7r88MQ0";
+
+let gToken    = null;
+let gTokenExp = 0;
+
+const loadGsi = () => new Promise(resolve => {
+  if (window.google?.accounts) return resolve();
+  const s = document.createElement("script");
+  s.src = "https://accounts.google.com/gsi/client";
+  s.onload = resolve;
+  document.head.appendChild(s);
+});
+
+const getGToken = () => new Promise((resolve, reject) => {
+  // Usar token en memoria si no ha caducado
+  if (gToken && Date.now() < gTokenExp) return resolve(gToken);
+  loadGsi().then(() => {
+    const client = window.google.accounts.oauth2.initTokenClient({
+      client_id: G_CLIENT_ID,
+      scope: G_SCOPES,
+      callback: (resp) => {
+        if (resp.error) return reject(resp.error);
+        gToken    = resp.access_token;
+        gTokenExp = Date.now() + 55 * 60 * 1000;
+        resolve(gToken);
+      },
+    });
+    client.requestAccessToken();
+  });
+});
+
+const getOrCreateDriveFolder = async (token, colorName) => {
+  // Buscar carpeta existente
+  const q   = `name='${colorName}' and '${G_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id)`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json();
+  if (data.files && data.files.length > 0) return data.files[0].id;
+
+  // Crear carpeta si no existe
+  const create = await fetch("https://www.googleapis.com/drive/v3/files", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: colorName, mimeType: "application/vnd.google-apps.folder", parents: [G_FOLDER_ID] }),
+  });
+  const folder = await create.json();
+  return folder.id;
+};
+
+const uploadPhotoToDrive = async (token, folderId, name, dataUrl) => {
+  const blob     = await (await fetch(dataUrl)).blob();
+  const metadata = JSON.stringify({ name, parents: [folderId] });
+  const form     = new FormData();
+  form.append("metadata", new Blob([metadata], { type: "application/json" }));
+  form.append("file", blob);
+  const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  return res.json();
+};
+
+// ─── Apps Script solo para Sheets ────────────────────────────────
 const BACKEND = "https://script.google.com/macros/s/AKfycbw7IhJ6sg_Qm27O-6mU8CAvmNLA95ICP5Mm4EFQjsiGnemLnkkPx7dR6lgO55dSZDZfbw/exec";
 
 const driveApi = async (body) => {
   const url = `${BACKEND}?payload=${encodeURIComponent(JSON.stringify(body))}`;
   const res = await fetch(url);
-  return res.json();
-};
-
-const driveApiPost = async (body) => {
-  const res = await fetch(BACKEND, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: "payload=" + encodeURIComponent(JSON.stringify(body)),
-  });
   return res.json();
 };
 
@@ -150,12 +208,18 @@ const syncCtrl = async (ctrl, formats, colors) => {
   const color     = colors.find(c => c.id === ctrl.colorId);
   const colorName = color ? `${color.serie} ${color.color}` : "Sin color";
 
-  // Subir fotos nuevas a Drive
-  for (const tile of (ctrl.tiles||[])) {
-    for (const foto of (tile.fotos||[])) {
-      if (!foto.uploaded && foto.src?.startsWith("data:")) {
-        const { base64, mimeType } = await toBase64(foto.src);
-        await driveApiPost({ action:"uploadPhoto", name:foto.name||`foto_${Date.now()}.jpg`, base64, mimeType, colorName });
+  // Comprobar si hay fotos nuevas que subir
+  const fotosNuevas = (ctrl.tiles||[]).flatMap(t => (t.fotos||[]).filter(f => !f.uploaded && f.src?.startsWith("data:")));
+
+  if (fotosNuevas.length > 0) {
+    // Pedir token de Google solo cuando hay fotos que subir
+    const token    = await getGToken();
+    const folderId = await getOrCreateDriveFolder(token, colorName);
+    for (const tile of (ctrl.tiles||[])) {
+      for (const foto of (tile.fotos||[])) {
+        if (!foto.uploaded && foto.src?.startsWith("data:")) {
+          await uploadPhotoToDrive(token, folderId, foto.name||`foto_${Date.now()}.jpg`, foto.src);
+        }
       }
     }
   }
