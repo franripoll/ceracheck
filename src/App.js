@@ -21,13 +21,15 @@ const sb = async (path, opts={}) => {
 
 // ─── AppData (history, pending, reclamaciones, etc.) ─────────────
 const saveAppData = async (key, data) => {
-  await sb(`app_data?key=eq.${key}`, {
-    method: "DELETE",
-    prefer: "return=minimal",
-  });
+  // Protección: nunca guardar arrays vacíos para datos críticos
+  if (["history", "pending", "reclamaciones"].includes(key) && Array.isArray(data) && data.length === 0) {
+    // Solo guardar vacío si ya estaba vacío en Supabase
+    const existing = await loadAppData(key);
+    if (existing && existing.length > 0) return; // no sobreescribir con vacío
+  }
   await sb("app_data", {
     method: "POST",
-    prefer: "return=minimal",
+    prefer: "return=minimal,resolution=merge-duplicates",
     body: JSON.stringify({ key, data }),
   });
 };
@@ -598,6 +600,7 @@ const SEED_PENDING_LAB = [];
 
 export default function App() {
   const [screen, setScreen]         = useState("home");
+  const [appLoading, setAppLoading] = useState(true);
   const [history, setHistory]       = useState(SEED_HISTORY);
   const [formats, setFormats]       = useState(DEFAULT_FORMATS);
   const [colors, setColors]         = useState(DEFAULT_COLORS);
@@ -661,15 +664,17 @@ export default function App() {
           loadAppData("reclamaciones"),
           loadAppData("seenIds"),
         ]);
-        if (loadedColors       && loadedColors.length  > 0) setColors(loadedColors);
-        if (loadedFormats      && loadedFormats.length > 0) setFormats(loadedFormats);
-        if (loadedHistory      && loadedHistory.length > 0) setHistory(loadedHistory);
-        if (loadedPending      && loadedPending.length > 0) setPending(loadedPending);
-        if (loadedPendingLab   && loadedPendingLab.length > 0) setPendingLab(loadedPendingLab);
-        if (loadedRecs         && loadedRecs.length    > 0) setReclamaciones(loadedRecs);
-        if (loadedSeen         && loadedSeen.length    > 0) setSeenIds(new Set(loadedSeen));
+        if (loadedColors     && loadedColors.length    > 0) setColors(loadedColors);
+        if (loadedFormats    && loadedFormats.length   > 0) setFormats(loadedFormats);
+        if (loadedHistory    && loadedHistory.length   > 0) setHistory(loadedHistory);
+        if (loadedPending    && loadedPending.length   > 0) setPending(loadedPending);
+        if (loadedPendingLab && loadedPendingLab.length > 0) setPendingLab(loadedPendingLab);
+        if (loadedRecs       && loadedRecs.length      > 0) setReclamaciones(loadedRecs);
+        if (loadedSeen       && loadedSeen.length      > 0) setSeenIds(new Set(loadedSeen));
       } catch(e) {
-        // Sin token todavía — se cargará tras el primer login
+        console.error("Error cargando datos:", e);
+      } finally {
+        setAppLoading(false);
       }
     };
     load();
@@ -885,6 +890,20 @@ export default function App() {
   const allSeries    = [...new Set(colors.map(c=>c.serie))];
 
   // ── HOME ─────────────────────────────────────────────────────────
+  if (appLoading) {
+    return (
+      <div style={{
+        background:"#0a0a0a", minHeight:"100vh", display:"flex",
+        flexDirection:"column", alignItems:"center", justifyContent:"center", gap:16,
+      }}>
+        <div style={{fontSize:24, fontWeight:700, color:"#d4af37", letterSpacing:"0.2em"}}>CERACHECK</div>
+        <div style={{fontSize:12, color:"#555", letterSpacing:"0.1em"}}>Cargando datos...</div>
+        <div style={{width:40, height:40, border:"3px solid #1a1a1a", borderTop:"3px solid #d4af37", borderRadius:"50%", animation:"spin 1s linear infinite"}}/>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
   if (screen === "home") {
     const aprobados  = history.filter(c=>c.verdict==="APROBADO").length;
     const rechazados = history.filter(c=>c.verdict==="RECHAZADO").length;
