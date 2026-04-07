@@ -650,12 +650,19 @@ export default function App() {
     setEditingId(null);
     setScreen(prevScreen || "history");
     setSyncing(true); setSyncError("");
-    Promise.all([
-      syncCtrl(ctrl, formats, colors),
-      saveAppData("history", newHistory),
-      saveAppData("pending", newPending),
-      saveAppData("pendingLab", newPendingLab),
-    ]).then(()=>setSyncing(false))
+    syncCtrl(ctrl, formats, colors)
+      .then(driveFolderUrl => {
+        // Actualizar history con el driveFolderUrl si es nuevo
+        const finalCtrl = {...ctrl, driveFolderUrl};
+        const finalHistory = newHistory.map(c => c.id === finalCtrl.id ? finalCtrl : c);
+        setHistory(finalHistory);
+        return Promise.all([
+          saveAppData("history", finalHistory),
+          saveAppData("pending", newPending),
+          saveAppData("pendingLab", newPendingLab),
+        ]);
+      })
+      .then(()=>setSyncing(false))
       .catch(e=>{setSyncing(false);setSyncError("Sync: "+e.message);});
   };
 
@@ -680,11 +687,17 @@ export default function App() {
     setLabCtrl(null);
     setScreen(prevLabScreen || "pending-lab");
     setSyncing(true); setSyncError("");
-    Promise.all([
-      syncCtrl(ctrl, formats, colors),
-      saveAppData("history", newHistory),
-      saveAppData("pendingLab", newPendingLab),
-    ]).then(()=>setSyncing(false))
+    syncCtrl(ctrl, formats, colors)
+      .then(driveFolderUrl => {
+        const finalCtrl    = {...ctrl, driveFolderUrl};
+        const finalHistory = newHistory.map(c => c.id === finalCtrl.id ? finalCtrl : c);
+        setHistory(finalHistory);
+        return Promise.all([
+          saveAppData("history", finalHistory),
+          saveAppData("pendingLab", newPendingLab),
+        ]);
+      })
+      .then(()=>setSyncing(false))
       .catch(e=>{setSyncing(false);setSyncError("Sync: "+e.message);});
   };
 
