@@ -572,19 +572,41 @@ export default function App() {
     setScreen("new-lote");
   };
 
-  // Save lote data → goes to pending list
+  // Save lote data → goes to pending list or back to history
   const saveLote = () => {
-    let updated;
-    if (editingId) {
-      updated = pending.map(c => c.id===editingId ? {...activeControl} : c);
+    const isInHistory = history.some(c => c.id === activeControl.id);
+    if (isInHistory) {
+      // Actualizar en historial y sincronizar
+      const updatedCtrl = {...activeControl, verdict: getVerdict(activeControl)};
+      const newHistory  = history.map(c => c.id === updatedCtrl.id ? updatedCtrl : c);
+      setHistory(newHistory);
+      setAC(null);
+      setEditingId(null);
+      setScreen("history");
+      setSyncing(true); setSyncError("");
+      syncCtrl(updatedCtrl, formats, colors)
+        .then(driveFolderUrl => {
+          const finalCtrl    = {...updatedCtrl, driveFolderUrl};
+          const finalHistory = newHistory.map(c => c.id === finalCtrl.id ? finalCtrl : c);
+          setHistory(finalHistory);
+          return saveAppData("history", finalHistory);
+        })
+        .then(()=>setSyncing(false))
+        .catch(e=>{setSyncing(false);setSyncError("Sync: "+e.message);});
     } else {
-      updated = [activeControl, ...pending];
+      // Actualizar en pendientes
+      let updated;
+      if (editingId) {
+        updated = pending.map(c => c.id===editingId ? {...activeControl} : c);
+      } else {
+        updated = [activeControl, ...pending];
+      }
+      setPending(updated);
+      setAC(null);
+      setEditingId(null);
+      setScreen("pending");
+      saveAppData("pending", updated).catch(()=>{});
     }
-    setPending(updated);
-    setAC(null);
-    setEditingId(null);
-    setScreen("pending");
-    saveAppData("pending", updated).catch(()=>{});
   };
 
   // Open a pending control for inspection
@@ -599,6 +621,9 @@ export default function App() {
   const editLote = (ctrl) => {
     setAC({...ctrl});
     setEditingId(ctrl.id);
+    // Detectar si viene del historial o de pendientes
+    const isInHistory = history.some(c => c.id === ctrl.id);
+    setPrevScreen(isInHistory ? "history" : "pending");
     setScreen("new-lote");
   };
 
@@ -1086,7 +1111,7 @@ export default function App() {
     return (
       <div style={S.app}>
         <div style={S.header}>
-          <button style={S.backBtn} onClick={()=>{setAC(null);setEditingId(null);setScreen(isEditingLote?"pending":"home");}}>← Cancelar</button>
+          <button style={S.backBtn} onClick={()=>{setAC(null);setEditingId(null);setScreen(prevScreen||"home");}}>← Cancelar</button>
           <span style={S.headerTitle}>{isEditingLote?"Editar lote":"Nuevo lote"}</span>
           <span style={{fontSize:11,color:C.textMuted}}>{formatDate(ctrl.date)}</span>
         </div>
