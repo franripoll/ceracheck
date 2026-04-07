@@ -204,6 +204,38 @@ const saveFormatsToSheet = async (formats) => {
   );
 };
 
+// ─── Persistencia JSON de datos de la app ────────────────────────
+const DATA_SHEET = "AppData";
+
+const saveAppData = async (key, data) => {
+  await ensureSheet(DATA_SHEET);
+  // Read existing data
+  const res  = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${DATA_SHEET}!A:B`);
+  const rows = (await res.json()).values || [];
+  const idx  = rows.findIndex(r => r[0] === key);
+  const json = JSON.stringify(data);
+  if (idx >= 0) {
+    await authFetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${DATA_SHEET}!A${idx+1}:B${idx+1}?valueInputOption=RAW`,
+      { method: "PUT", body: JSON.stringify({ values: [[key, json]] }) }
+    );
+  } else {
+    await authFetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${DATA_SHEET}!A1:append?valueInputOption=RAW`,
+      { method: "POST", body: JSON.stringify({ values: [[key, json]] }) }
+    );
+  }
+};
+
+const loadAppData = async (key) => {
+  await ensureSheet(DATA_SHEET);
+  const res  = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${DATA_SHEET}!A:B`);
+  const rows = (await res.json()).values || [];
+  const row  = rows.find(r => r[0] === key);
+  if (!row || !row[1]) return null;
+  try { return JSON.parse(row[1]); } catch { return null; }
+};
+
 const syncCtrl = async (ctrl, formats, colors) => {
   await ensureHeaders();
 
@@ -663,16 +695,26 @@ export default function App() {
   const [dirCustomTo,     setDirCustomTo]     = useState("");
   const [dirCustom,       setDirCustom]       = useState(false);
 
-  // ── Cargar colores y formatos desde Sheets al arrancar ───────────
+  // ── Cargar todos los datos desde Sheets al arrancar ─────────────
   useEffect(() => {
     const load = async () => {
       try {
-        const [loadedColors, loadedFormats] = await Promise.all([
+        const [loadedColors, loadedFormats, loadedHistory, loadedPending, loadedPendingLab, loadedRecs, loadedSeen] = await Promise.all([
           loadColorsFromSheet(),
           loadFormatsFromSheet(),
+          loadAppData("history"),
+          loadAppData("pending"),
+          loadAppData("pendingLab"),
+          loadAppData("reclamaciones"),
+          loadAppData("seenIds"),
         ]);
-        if (loadedColors  && loadedColors.length  > 0) setColors(loadedColors);
-        if (loadedFormats && loadedFormats.length > 0) setFormats(loadedFormats);
+        if (loadedColors       && loadedColors.length  > 0) setColors(loadedColors);
+        if (loadedFormats      && loadedFormats.length > 0) setFormats(loadedFormats);
+        if (loadedHistory      && loadedHistory.length > 0) setHistory(loadedHistory);
+        if (loadedPending      && loadedPending.length > 0) setPending(loadedPending);
+        if (loadedPendingLab   && loadedPendingLab.length > 0) setPendingLab(loadedPendingLab);
+        if (loadedRecs         && loadedRecs.length    > 0) setReclamaciones(loadedRecs);
+        if (loadedSeen         && loadedSeen.length    > 0) setSeenIds(new Set(loadedSeen));
       } catch(e) {
         // Sin token todavía — se cargará tras el primer login
       }
@@ -706,14 +748,17 @@ export default function App() {
 
   // Save lote data → goes to pending list
   const saveLote = () => {
+    let updated;
     if (editingId) {
-      setPending(p => p.map(c => c.id===editingId ? {...activeControl} : c));
+      updated = pending.map(c => c.id===editingId ? {...activeControl} : c);
     } else {
-      setPending(p => [activeControl, ...p]);
+      updated = [activeControl, ...pending];
     }
+    setPending(updated);
     setAC(null);
     setEditingId(null);
     setScreen("pending");
+    saveAppData("pending", updated).catch(()=>{});
   };
 
   // Open a pending control for inspection
@@ -763,19 +808,28 @@ export default function App() {
 
   const saveControl = () => {
     const ctrl = {...activeControl, verdict: getVerdict(activeControl)};
-    setPending(p => p.filter(c => c.id !== ctrl.id));
+    const newPending = pending.filter(c => c.id !== ctrl.id);
+    let newHistory, newPendingLab;
     if (history.find(c => c.id === ctrl.id)) {
-      setHistory(h => h.map(c => c.id === ctrl.id ? ctrl : c));
+      newHistory    = history.map(c => c.id === ctrl.id ? ctrl : c);
+      newPendingLab = pendingLab;
     } else {
-      setHistory(h => [ctrl, ...h]);
-      setPendingLab(p => [...p, ctrl.id]);
+      newHistory    = [ctrl, ...history];
+      newPendingLab = [...pendingLab, ctrl.id];
     }
+    setPending(newPending);
+    setHistory(newHistory);
+    setPendingLab(newPendingLab);
     setAC(null);
     setEditingId(null);
     setScreen(prevScreen || "history");
     setSyncing(true); setSyncError("");
-    syncCtrl(ctrl, formats, colors)
-      .then(()=>setSyncing(false))
+    Promise.all([
+      syncCtrl(ctrl, formats, colors),
+      saveAppData("history", newHistory),
+      saveAppData("pending", newPending),
+      saveAppData("pendingLab", newPendingLab),
+    ]).then(()=>setSyncing(false))
       .catch(e=>{setSyncing(false);setSyncError("Sync: "+e.message);});
   };
 
@@ -793,13 +847,18 @@ export default function App() {
 
   const saveLab = () => {
     const ctrl = {...labCtrl, labDone: true};
-    setHistory(h => h.map(c => c.id === ctrl.id ? ctrl : c));
-    setPendingLab(p => p.filter(id => id !== ctrl.id));
+    const newHistory    = history.map(c => c.id === ctrl.id ? ctrl : c);
+    const newPendingLab = pendingLab.filter(id => id !== ctrl.id);
+    setHistory(newHistory);
+    setPendingLab(newPendingLab);
     setLabCtrl(null);
     setScreen(prevLabScreen || "pending-lab");
     setSyncing(true); setSyncError("");
-    syncCtrl(ctrl, formats, colors)
-      .then(()=>setSyncing(false))
+    Promise.all([
+      syncCtrl(ctrl, formats, colors),
+      saveAppData("history", newHistory),
+      saveAppData("pendingLab", newPendingLab),
+    ]).then(()=>setSyncing(false))
       .catch(e=>{setSyncing(false);setSyncError("Sync: "+e.message);});
   };
 
@@ -1107,7 +1166,7 @@ export default function App() {
                             ...S.secondaryBtn,flex:1,fontSize:11,
                             borderColor:isSeen?"#3a3a3a":"#4ade8040",
                             color:isSeen?"#4a4a4a":C.green,
-                          }} onClick={()=>{setSeenIds(s=>{const n=new Set(s); isSeen?n.delete(ctrl.id):n.add(ctrl.id); return n;}); if(!isSeen) setExpandedHomeId(null);}}>
+                          }} onClick={()=>{const n=new Set(seenIds); isSeen?n.delete(ctrl.id):n.add(ctrl.id); setSeenIds(n); saveAppData("seenIds",[...n]).catch(()=>{}); if(!isSeen) setExpandedHomeId(null);}}>
                             {isSeen?"✓ Visto":"Marcar visto"}
                           </button>
                         </div>
@@ -2293,7 +2352,7 @@ export default function App() {
                                 <div style={{fontSize:12,color:C.textDim,lineHeight:1.5}}>{rec.descripcion}</div>
                               </div>
                               <button style={{background:"none",border:"none",color:"#f87171",cursor:"pointer",fontSize:14,padding:"0 0 0 8px"}}
-                                onClick={()=>setReclamaciones(r=>r.filter(x=>x.id!==rec.id))}>✕</button>
+                                onClick={()=>{const u=reclamaciones.filter(x=>x.id!==rec.id); setReclamaciones(u); saveAppData("reclamaciones",u).catch(()=>{})}}>✕</button>
                             </div>
                             {rec.fotos.length>0&&(
                               <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:4,marginTop:8}}>
@@ -2323,7 +2382,7 @@ export default function App() {
                         borderColor: seenIds.has(ctrl.id)?"#3a3a3a":"#4ade8040",
                         color: seenIds.has(ctrl.id)?"#4a4a4a":C.green,
                         background: seenIds.has(ctrl.id)?"transparent":"rgba(74,222,128,0.05)",
-                      }} onClick={()=>{setSeenIds(s=>{const n=new Set(s); seenIds.has(ctrl.id)?n.delete(ctrl.id):n.add(ctrl.id); return n;}); if(!seenIds.has(ctrl.id)){setScreen("home");}}}>
+                      }} onClick={()=>{const n=new Set(seenIds); seenIds.has(ctrl.id)?n.delete(ctrl.id):n.add(ctrl.id); setSeenIds(n); saveAppData("seenIds",[...n]).catch(()=>{}); if(!seenIds.has(ctrl.id)){setScreen("home")}}}>
                         {seenIds.has(ctrl.id)?"✓ Visto":"Marcar visto"}
                       </button>
                     </div>
@@ -2524,9 +2583,11 @@ export default function App() {
             <button style={{...S.primaryBtn,background:canSave?"#f87171":"#3a2a2a",border:"none",opacity:canSave?1:0.5}}
               disabled={!canSave}
               onClick={()=>{
-                setReclamaciones(r=>[rec,...r]);
+                const updated = [rec, ...reclamaciones];
+                setReclamaciones(updated);
                 setNewRec(null);
                 setScreen("reclamaciones");
+                saveAppData("reclamaciones", updated).catch(()=>{});
               }}>
               Guardar reclamación
             </button>
@@ -2591,7 +2652,7 @@ export default function App() {
                     </div>
                     <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8,flexShrink:0,paddingLeft:10}}>
                       <button style={{background:"none",border:"none",color:"#f87171",cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}
-                        onClick={e=>{e.stopPropagation(); setReclamaciones(r=>r.filter(x=>x.id!==rec.id));}}>✕</button>
+                        onClick={e=>{e.stopPropagation(); const u=reclamaciones.filter(x=>x.id!==rec.id); setReclamaciones(u); saveAppData("reclamaciones",u).catch(()=>{})}}>✕</button>
                       <span style={{fontSize:11,color:isExpanded?"#f87171":C.textMuted}}>{isExpanded?"▲":"▼"}</span>
                     </div>
                   </div>
