@@ -4,12 +4,8 @@ import { useState, useEffect, useCallback } from "react";
 const BACKEND = "https://script.google.com/macros/s/AKfycbw7IhJ6sg_Qm27O-6mU8CAvmNLA95ICP5Mm4EFQjsiGnemLnkkPx7dR6lgO55dSZDZfbw/exec";
 
 const api = async (body) => {
-  const form = new FormData();
-  form.append("payload", JSON.stringify(body));
-  const res = await fetch(BACKEND, {
-    method: "POST",
-    body: form,
-  });
+  const url = `${BACKEND}?payload=${encodeURIComponent(JSON.stringify(body))}`;
+  const res = await fetch(url);
   return res.json();
 };
 
