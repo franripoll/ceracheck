@@ -1,70 +1,31 @@
 import { useState, useEffect, useCallback } from "react";
 
-// ─── Google API Config ────────────────────────────────────────────
-const G_CLIENT_ID   = "624082917141-18mp6bl25886k1044ucuadcqjind99j5.apps.googleusercontent.com";
-const G_SHEET_ID    = "1lT_2n64heYosIrCoj6K1oPPe5M0l0Eg6sk73uSjBA-Y";
-const G_FOLDER_ID   = "1EpR84ksRpVYaI5TwuTp6ZFTnz7r88MQ0";
-const G_SCOPES      = "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file";
-const SHEET_NAME    = "Controles";
-const SHEET_HEADERS = [
-  "ID","Fecha","Proveedor","Referencia","Lote","Color","Serie","IN/OUT",
-  "Formato","Espesor","Num_Baldosas",
-  "B1_Tono","B1_Ancho","B1_Largo","B1_Planimetria","B1_PlanDir","B1_RD","B1_Nota",
-  "B2_Tono","B2_Ancho","B2_Largo","B2_Planimetria","B2_PlanDir","B2_RD","B2_Nota",
-  "B3_Tono","B3_Ancho","B3_Largo","B3_Planimetria","B3_PlanDir","B3_RD","B3_Nota",
-  "B4_Tono","B4_Ancho","B4_Largo","B4_Planimetria","B4_PlanDir","B4_RD","B4_Nota",
-  "B5_Tono","B5_Ancho","B5_Largo","B5_Planimetria","B5_PlanDir","B5_RD","B5_Nota",
-  "Lab_Espesor","Lab_Manchas","Fotos_Drive","Veredicto","Lab_Done","No_Muestras",
-];
+// ─── Backend Config ───────────────────────────────────────────────
+const BACKEND = "https://script.google.com/macros/s/AKfycbw7IhJ6sg_Qm27O-6mU8CAvmNLA95ICP5Mm4EFQjsiGnemLnkkPx7dR6lgO55dSZDZfbw/exec";
 
-// ─── Google Auth ──────────────────────────────────────────────────
-let gToken = null;
-
-const loadGsi = () => new Promise(resolve => {
-  if (window.google?.accounts) return resolve();
-  const s = document.createElement("script");
-  s.src = "https://accounts.google.com/gsi/client";
-  s.onload = resolve;
-  document.head.appendChild(s);
-});
-
-const getToken = () => new Promise((resolve, reject) => {
-  loadGsi().then(() => {
-    const client = window.google.accounts.oauth2.initTokenClient({
-      client_id: G_CLIENT_ID,
-      scope: G_SCOPES,
-      callback: (resp) => {
-        if (resp.error) return reject(resp.error);
-        gToken = resp.access_token;
-        resolve(gToken);
-      },
-    });
-    client.requestAccessToken();
+const api = async (body) => {
+  const res = await fetch(BACKEND, {
+    method: "POST",
+    body: JSON.stringify(body),
   });
-});
-
-const authFetch = async (url, opts={}) => {
-  if (!gToken) await getToken();
-  const res = await fetch(url, {
-    ...opts,
-    headers: { Authorization: `Bearer ${gToken}`, "Content-Type":"application/json", ...(opts.headers||{}) },
-  });
-  if (res.status === 401) { gToken = null; return authFetch(url, opts); }
-  return res;
+  return res.json();
 };
 
-// ─── Sheets helpers ───────────────────────────────────────────────
-const ensureHeaders = async () => {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${SHEET_NAME}!A1:A1`;
-  const res = await authFetch(url);
-  const data = await res.json();
-  if (data.values) return; // headers exist
-  await authFetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${SHEET_NAME}!A1:append?valueInputOption=RAW`,
-    { method:"POST", body: JSON.stringify({ values: [SHEET_HEADERS] }) }
-  );
+const apiGet = async (params) => {
+  const qs  = new URLSearchParams(params).toString();
+  const res = await fetch(`${BACKEND}?${qs}`);
+  return res.json();
 };
 
+// ─── Helpers de datos ─────────────────────────────────────────────
+const saveAppData       = (key, data)    => api({ action:"saveData", key, data });
+const loadAppData       = (key)          => apiGet({ action:"loadData", key }).then(r=>r.data);
+const saveColorsToSheet = (colors)       => api({ action:"saveColors", data:colors });
+const loadColorsFromSheet = ()           => apiGet({ action:"loadColors" }).then(r=>r.data);
+const saveFormatsToSheet  = (formats)    => api({ action:"saveFormats", data:formats });
+const loadFormatsFromSheet = ()          => apiGet({ action:"loadFormats" }).then(r=>r.data);
+
+// ─── Conversión control → fila Sheets ────────────────────────────
 const resolveAnchoForSheet = (tile, fmt) => {
   if (!tile.anchoOpt || tile.anchoOpt==="") return "";
   if (tile.anchoOpt==="otro") return tile.anchoCustom||"";
@@ -99,182 +60,47 @@ const ctrlToRow = (ctrl, formats, colors, driveFolderUrl) => {
     ctrl.grosor||10,
     ctrl.tiles?.length||0,
   ];
-  // Up to 5 baldosas
   for (let i=0; i<5; i++) {
     const t = ctrl.tiles?.[i];
     if (t) {
       const planRaw = t.planimetria==="otro"?t.planimetriaCustom:t.planimetria;
-      row.push(
-        t.tone||"",
-        resolveAnchoForSheet(t, fmt),
-        resolveLargoForSheet(t, fmt),
-        planRaw||"",
-        t.planimetriaDir||"",
-        t.rd||"",
-        t.nota||"",
-      );
+      row.push(t.tone||"", resolveAnchoForSheet(t,fmt), resolveLargoForSheet(t,fmt), planRaw||"", t.planimetriaDir||"", t.rd||"", t.nota||"");
     } else {
       row.push("","","","","","","");
     }
   }
-  row.push(
-    ctrl.labEspesor||"",
-    ctrl.labManchas?"Sí":"No",
-    driveFolderUrl||"",
-    ctrl.verdict||"",
-    ctrl.labDone?"Sí":"No",
-    ctrl.noMuestras?"Sí":"No",
-  );
+  row.push(ctrl.labEspesor||"", ctrl.labManchas?"Sí":"No", driveFolderUrl||"", ctrl.verdict||"", ctrl.labDone?"Sí":"No", ctrl.noMuestras?"Sí":"No");
   return row;
 };
 
-// ─── Drive helpers ────────────────────────────────────────────────
-const uploadPhoto = async (src, name, folderId) => {
-  const blob = await (await fetch(src)).blob();
-  const meta = JSON.stringify({ name, parents:[folderId] });
-  const form = new FormData();
-  form.append("metadata", new Blob([meta],{type:"application/json"}));
-  form.append("file", blob);
-  if (!gToken) await getToken();
-  const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", {
-    method:"POST", headers:{ Authorization:`Bearer ${gToken}` }, body:form,
-  });
-  const data = await res.json();
-  return data.id;
-};
-
-const createDriveFolder = async (name, parentId) => {
-  const res = await authFetch("https://www.googleapis.com/drive/v3/files", {
-    method:"POST",
-    body: JSON.stringify({ name, mimeType:"application/vnd.google-apps.folder", parents:[parentId] }),
-  });
-  const data = await res.json();
-  return { id: data.id, url: `https://drive.google.com/drive/folders/${data.id}` };
-};
-
-// ─── Colores y Formatos en Sheets ────────────────────────────────
-const COLORS_SHEET  = "Colores";
-const FORMATS_SHEET = "Formatos";
-
-const ensureSheet = async (sheetName) => {
-  const res  = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}?fields=sheets.properties.title`);
-  const data = await res.json();
-  const exists = data.sheets?.some(s => s.properties.title === sheetName);
-  if (!exists) {
-    await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}:batchUpdate`, {
-      method: "POST",
-      body: JSON.stringify({ requests: [{ addSheet: { properties: { title: sheetName } } }] }),
-    });
-  }
-};
-
-const loadColorsFromSheet = async () => {
-  await ensureSheet(COLORS_SHEET);
-  const res  = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${COLORS_SHEET}!A:D`);
-  const data = await res.json();
-  const rows = (data.values || []).slice(1); // skip header
-  if (!rows.length) return null;
-  return rows.map(r => ({ id: r[0]||"", serie: r[1]||"", abbr: r[2]||"", color: r[3]||"" })).filter(r=>r.id);
-};
-
-const saveColorsToSheet = async (colors) => {
-  await ensureSheet(COLORS_SHEET);
-  const values = [["id","serie","abbr","color"], ...colors.map(c=>[c.id,c.serie,c.abbr,c.color])];
-  await authFetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${COLORS_SHEET}!A1?valueInputOption=RAW`,
-    { method: "PUT", body: JSON.stringify({ values }) }
-  );
-};
-
-const loadFormatsFromSheet = async () => {
-  await ensureSheet(FORMATS_SHEET);
-  const res  = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${FORMATS_SHEET}!A:D`);
-  const data = await res.json();
-  const rows = (data.values || []).slice(1);
-  if (!rows.length) return null;
-  return rows.map(r => ({ id: r[0]||"", label: r[1]||"", largo: parseInt(r[2])||0, ancho: parseInt(r[3])||0 })).filter(r=>r.id);
-};
-
-const saveFormatsToSheet = async (formats) => {
-  await ensureSheet(FORMATS_SHEET);
-  const values = [["id","label","largo","ancho"], ...formats.map(f=>[f.id,f.label,f.largo,f.ancho])];
-  await authFetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${FORMATS_SHEET}!A1?valueInputOption=RAW`,
-    { method: "PUT", body: JSON.stringify({ values }) }
-  );
-};
-
-// ─── Persistencia JSON de datos de la app ────────────────────────
-const DATA_SHEET = "AppData";
-
-const saveAppData = async (key, data) => {
-  await ensureSheet(DATA_SHEET);
-  // Read existing data
-  const res  = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${DATA_SHEET}!A:B`);
-  const rows = (await res.json()).values || [];
-  const idx  = rows.findIndex(r => r[0] === key);
-  const json = JSON.stringify(data);
-  if (idx >= 0) {
-    await authFetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${DATA_SHEET}!A${idx+1}:B${idx+1}?valueInputOption=RAW`,
-      { method: "PUT", body: JSON.stringify({ values: [[key, json]] }) }
-    );
-  } else {
-    await authFetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${DATA_SHEET}!A1:append?valueInputOption=RAW`,
-      { method: "POST", body: JSON.stringify({ values: [[key, json]] }) }
-    );
-  }
-};
-
-const loadAppData = async (key) => {
-  await ensureSheet(DATA_SHEET);
-  const res  = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${DATA_SHEET}!A:B`);
-  const rows = (await res.json()).values || [];
-  const row  = rows.find(r => r[0] === key);
-  if (!row || !row[1]) return null;
-  try { return JSON.parse(row[1]); } catch { return null; }
+// ─── Sync control con backend ─────────────────────────────────────
+const toBase64 = async (dataUrl) => {
+  const parts = dataUrl.split(",");
+  return { base64: parts[1], mimeType: parts[0].match(/:(.*?);/)[1] };
 };
 
 const syncCtrl = async (ctrl, formats, colors) => {
-  await ensureHeaders();
-
-  // Create Drive folder and upload photos
   let driveFolderUrl = ctrl.driveFolderUrl || "";
+
+  // Crear carpeta y subir fotos si es nuevo
   if (!ctrl.driveFolderUrl) {
     const folderName = `${ctrl.lote||ctrl.id} - ${ctrl.date?new Date(ctrl.date).toLocaleDateString("es-ES"):""}`;
-    const folder = await createDriveFolder(folderName, G_FOLDER_ID);
+    const folder = await api({ action:"createFolder", name:folderName });
     driveFolderUrl = folder.url;
     for (const tile of (ctrl.tiles||[])) {
       for (const foto of (tile.fotos||[])) {
-        if (!foto.uploaded) {
-          await uploadPhoto(foto.src, foto.name||`foto_${Date.now()}.jpg`, folder.id);
+        if (!foto.uploaded && foto.src?.startsWith("data:")) {
+          const { base64, mimeType } = await toBase64(foto.src);
+          await api({ action:"uploadPhoto", name:foto.name||`foto_${Date.now()}.jpg`, base64, mimeType });
         }
       }
     }
   }
 
-  // Write/update row in Sheets
-  // Find existing row by ID
-  const readRes  = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${SHEET_NAME}!A:A`);
-  const readData = await readRes.json();
-  const rows     = readData.values || [];
-  const rowIdx   = rows.findIndex(r => r[0] === ctrl.id);
-  const row      = ctrlToRow(ctrl, formats, colors, driveFolderUrl);
+  // Guardar fila legible en Sheets
+  const row = ctrlToRow(ctrl, formats, colors, driveFolderUrl);
+  await api({ action:"saveCtrlRow", data:row });
 
-  if (rowIdx > 0) {
-    // Update existing row
-    await authFetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${SHEET_NAME}!A${rowIdx+1}?valueInputOption=RAW`,
-      { method:"PUT", body: JSON.stringify({ values:[row] }) }
-    );
-  } else {
-    // Append new row
-    await authFetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${G_SHEET_ID}/values/${SHEET_NAME}!A1:append?valueInputOption=RAW`,
-      { method:"POST", body: JSON.stringify({ values:[row] }) }
-    );
-  }
   return driveFolderUrl;
 };
 
