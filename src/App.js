@@ -148,18 +148,24 @@ const syncCtrl = async (ctrl, formats, colors) => {
   const color     = colors.find(c => c.id === ctrl.colorId);
   const colorName = color ? `${color.serie} ${color.color}` : "Sin color";
 
-  // Comprobar si hay fotos nuevas que subir
   const fotosNuevas = (ctrl.tiles||[]).flatMap(t =>
     (t.fotos||[]).filter(f => !f.uploaded && f.src?.startsWith("data:"))
   );
 
+  console.log("syncCtrl: fotos nuevas:", fotosNuevas.length, "color:", colorName);
+
   if (fotosNuevas.length > 0) {
+    console.log("syncCtrl: pidiendo token Google...");
     const token    = await getGToken();
+    console.log("syncCtrl: token OK, buscando carpeta...");
     const folderId = await getOrCreateDriveFolder(token, colorName);
+    console.log("syncCtrl: carpeta OK:", folderId, "subiendo fotos...");
     for (const tile of (ctrl.tiles||[])) {
       for (const foto of (tile.fotos||[])) {
         if (!foto.uploaded && foto.src?.startsWith("data:")) {
+          console.log("syncCtrl: subiendo foto:", foto.name);
           await uploadPhotoToDrive(token, folderId, foto.name||`foto_${Date.now()}.jpg`, foto.src);
+          console.log("syncCtrl: foto subida OK");
         }
       }
     }
@@ -167,36 +173,6 @@ const syncCtrl = async (ctrl, formats, colors) => {
 
   return "";
 };
-
-// ─── Sync control ─────────────────────────────────────────────────
-const syncCtrl = async (ctrl, formats, colors) => {
-  const color     = colors.find(c => c.id === ctrl.colorId);
-  const colorName = color ? `${color.serie} ${color.color}` : "Sin color";
-
-  // Comprobar si hay fotos nuevas que subir
-  const fotosNuevas = (ctrl.tiles||[]).flatMap(t => (t.fotos||[]).filter(f => !f.uploaded && f.src?.startsWith("data:")));
-
-  let updatedCtrl = ctrl;
-
-  if (fotosNuevas.length > 0) {
-    // Pedir token de Google solo cuando hay fotos que subir
-    const token    = await getGToken();
-    const folderId = await getOrCreateDriveFolder(token, colorName);
-    const newTiles = [];
-    for (const tile of (ctrl.tiles||[])) {
-      const newFotos = [];
-      for (const foto of (tile.fotos||[])) {
-        if (!foto.uploaded && foto.src?.startsWith("data:")) {
-          await uploadPhotoToDrive(token, folderId, foto.name||`foto_${Date.now()}.jpg`, foto.src);
-          newFotos.push({...foto, uploaded: true});
-        } else {
-          newFotos.push(foto);
-        }
-      }
-      newTiles.push({...tile, fotos: newFotos});
-    }
-    updatedCtrl = {...ctrl, tiles: newTiles};
-  }
 
 
 const DEFAULT_FORMATS = [
@@ -704,7 +680,7 @@ export default function App() {
           if (tieneFotos && updatedCtrl.verdict) return syncCtrl(updatedCtrl, formats, colors);
         })
         .then(()=>setSyncing(false))
-        .catch(e=>{setSyncing(false); setSyncError("Sync: "+e.message);});
+        .catch(e=>{setSyncing(false); setSyncError("Sync: "+e.message); console.error("SYNC ERROR:", e);});
     } else {
       Promise.all(saves).catch(()=>{});
     }
@@ -790,7 +766,7 @@ export default function App() {
       return saveAppData("history", finalHistory);
     })
     .then(()=>setSyncing(false))
-    .catch(e=>{setSyncing(false);setSyncError("Sync: "+e.message);});
+    .catch(e=>{setSyncing(false);setSyncError("Sync: "+e.message); console.error("SYNC ERROR:", e);});
   };
 
   const openLab = (ctrl, from="pending-lab") => {
@@ -829,7 +805,7 @@ export default function App() {
       }
     })
     .then(()=>setSyncing(false))
-    .catch(e=>{setSyncing(false);setSyncError("Sync: "+e.message);});
+    .catch(e=>{setSyncing(false);setSyncError("Sync: "+e.message); console.error("SYNC ERROR:", e);});
   };
 
   const updateLab  = (f,v) => setLabCtrl(c => ({...c, [f]:v}));
