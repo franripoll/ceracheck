@@ -29,14 +29,31 @@ const sb = async (path, opts={}) => {
 const saveAppData = async (key, data) => {
   // Protección: nunca guardar arrays vacíos para datos críticos
   if (["history", "pending", "reclamaciones"].includes(key) && Array.isArray(data) && data.length === 0) {
-    // Solo guardar vacío si ya estaba vacío en Supabase
     const existing = await loadAppData(key);
-    if (existing && existing.length > 0) return; // no sobreescribir con vacío
+    if (existing && existing.length > 0) return;
   }
+
+  // Si es history o pending, eliminar el base64 de las fotos antes de guardar
+  let dataToSave = data;
+  if ((key === "history" || key === "pending") && Array.isArray(data)) {
+    dataToSave = data.map(ctrl => ({
+      ...ctrl,
+      tiles: (ctrl.tiles||[]).map(tile => ({
+        ...tile,
+        fotos: (tile.fotos||[]).map(foto => ({
+          id: foto.id,
+          name: foto.name,
+          uploaded: foto.uploaded || false,
+          // No guardamos src (base64) — solo el nombre para referencia
+        }))
+      }))
+    }));
+  }
+
   await sb("app_data", {
     method: "POST",
     prefer: "return=minimal,resolution=merge-duplicates",
-    body: JSON.stringify({ key, data }),
+    body: JSON.stringify({ key, data: dataToSave }),
   });
 };
 
