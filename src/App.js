@@ -213,24 +213,33 @@ const syncCtrl = async (ctrl, formats, colors) => {
   // Comprobar si hay fotos nuevas que subir
   const fotosNuevas = (ctrl.tiles||[]).flatMap(t => (t.fotos||[]).filter(f => !f.uploaded && f.src?.startsWith("data:")));
 
+  let updatedCtrl = ctrl;
+
   if (fotosNuevas.length > 0) {
     // Pedir token de Google solo cuando hay fotos que subir
     const token    = await getGToken();
     const folderId = await getOrCreateDriveFolder(token, colorName);
+    const newTiles = [];
     for (const tile of (ctrl.tiles||[])) {
+      const newFotos = [];
       for (const foto of (tile.fotos||[])) {
         if (!foto.uploaded && foto.src?.startsWith("data:")) {
           await uploadPhotoToDrive(token, folderId, foto.name||`foto_${Date.now()}.jpg`, foto.src);
+          newFotos.push({...foto, uploaded: true});
+        } else {
+          newFotos.push(foto);
         }
       }
+      newTiles.push({...tile, fotos: newFotos});
     }
+    updatedCtrl = {...ctrl, tiles: newTiles};
   }
 
   // Guardar fila legible en Google Sheets via Apps Script
-  const row = ctrlToRow(ctrl, formats, colors, "");
+  const row = ctrlToRow(updatedCtrl, formats, colors, "");
   await driveApi({ action:"saveCtrlRow", data:row });
 
-  return "";
+  return updatedCtrl;
 };
 
 const DEFAULT_FORMATS = [
@@ -732,9 +741,13 @@ export default function App() {
     if (isInHistory) {
       setSyncing(true); setSyncError("");
       Promise.all(saves)
-        .then(() => syncCtrl(updatedCtrl, formats, colors))
+        .then(() => {
+          // Solo sincronizar con Sheets si el control tiene fotos (inspección completa)
+          const tieneFotos = updatedCtrl.tiles?.some(t => t.fotos?.length > 0);
+          if (tieneFotos && updatedCtrl.verdict) return syncCtrl(updatedCtrl, formats, colors);
+        })
         .then(()=>setSyncing(false))
-        .catch(e=>{setSyncing(false);setSyncError("Sync: "+e.message);});
+        .catch(e=>{setSyncing(false); setSyncError("Sync: "+e.message);});
     } else {
       Promise.all(saves).catch(()=>{});
     }
@@ -813,13 +826,11 @@ export default function App() {
       saveAppData("pendingLab", newPendingLab),
     ])
     .then(() => syncCtrl(ctrl, formats, colors))
-    .then(driveFolderUrl => {
-      if (driveFolderUrl && driveFolderUrl !== ctrl.driveFolderUrl) {
-        const finalCtrl    = {...ctrl, driveFolderUrl};
-        const finalHistory = newHistory.map(c => c.id === finalCtrl.id ? finalCtrl : c);
-        setHistory(finalHistory);
-        return saveAppData("history", finalHistory);
-      }
+    .then(updatedCtrl => {
+      // Guardar ctrl con fotos marcadas como uploaded
+      const finalHistory = newHistory.map(c => c.id === updatedCtrl.id ? updatedCtrl : c);
+      setHistory(finalHistory);
+      return saveAppData("history", finalHistory);
     })
     .then(()=>setSyncing(false))
     .catch(e=>{setSyncing(false);setSyncError("Sync: "+e.message);});
