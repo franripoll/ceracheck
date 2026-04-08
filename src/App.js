@@ -44,7 +44,8 @@ const saveAppData = async (key, data) => {
           id: foto.id,
           name: foto.name,
           uploaded: foto.uploaded || false,
-          // No guardamos src (base64) — solo el nombre para referencia
+          // Guardar src solo si es URL de Drive (no base64)
+          src: foto.src?.startsWith("data:") ? "" : (foto.src || ""),
         }))
       }))
     }));
@@ -183,18 +184,30 @@ const syncCtrl = async (ctrl, formats, colors) => {
     console.log("syncCtrl: token OK, buscando carpeta...");
     const folderId = await getOrCreateDriveFolder(token, colorName);
     console.log("syncCtrl: carpeta OK:", folderId, "subiendo fotos...");
+
+    // Subir fotos y guardar URL de Drive
+    const newTiles = [];
     for (const tile of (ctrl.tiles||[])) {
+      const newFotos = [];
       for (const foto of (tile.fotos||[])) {
         if (!foto.uploaded && foto.src?.startsWith("data:")) {
           console.log("syncCtrl: subiendo foto:", foto.name);
-          await uploadPhotoToDrive(token, folderId, foto.name||`foto_${Date.now()}.jpg`, foto.src);
-          console.log("syncCtrl: foto subida OK");
+          const result = await uploadPhotoToDrive(token, folderId, foto.name||`foto_${Date.now()}.jpg`, foto.src);
+          // Guardar URL de Drive como src, eliminar base64
+          const driveUrl = `https://drive.google.com/uc?export=view&id=${result.id}`;
+          newFotos.push({ id: foto.id, name: foto.name, src: driveUrl, uploaded: true });
+          console.log("syncCtrl: foto subida OK, url:", driveUrl);
+        } else {
+          newFotos.push(foto);
         }
       }
+      newTiles.push({...tile, fotos: newFotos});
     }
+    // Devolver ctrl actualizado con URLs de Drive
+    return {...ctrl, tiles: newTiles};
   }
 
-  return "";
+  return ctrl;
 };
 
 
@@ -813,16 +826,14 @@ export default function App() {
     setLabCtrl(null);
     setScreen(prevLabScreen || "pending-lab");
     setSyncing(true); setSyncError("");
-    // Guardar en AppData primero
     Promise.all([
       saveAppData("history", newHistory),
       saveAppData("pendingLab", newPendingLab),
     ])
     .then(() => syncCtrl(ctrl, formats, colors))
-    .then(driveFolderUrl => {
-      if (driveFolderUrl && driveFolderUrl !== ctrl.driveFolderUrl) {
-        const finalCtrl    = {...ctrl, driveFolderUrl};
-        const finalHistory = newHistory.map(c => c.id === finalCtrl.id ? finalCtrl : c);
+    .then(updatedCtrl => {
+      if (updatedCtrl && updatedCtrl !== ctrl) {
+        const finalHistory = newHistory.map(c => c.id === updatedCtrl.id ? updatedCtrl : c);
         setHistory(finalHistory);
         return saveAppData("history", finalHistory);
       }
