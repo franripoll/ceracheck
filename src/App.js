@@ -707,39 +707,36 @@ export default function App() {
   // Save lote data → goes to pending list or back to history
   const saveLote = () => {
     const isInHistory = history.some(c => c.id === activeControl.id);
+    const isInPending = pending.some(c => c.id === activeControl.id);
+    const updatedCtrl = {...activeControl, verdict: getVerdict(activeControl)};
+
+    // Actualizar en pending si está ahí
+    const newPending = isInPending
+      ? pending.map(c => c.id === updatedCtrl.id ? updatedCtrl : c)
+      : editingId ? pending : [updatedCtrl, ...pending];
+
+    // Actualizar en history si está ahí
+    const newHistory = isInHistory
+      ? history.map(c => c.id === updatedCtrl.id ? updatedCtrl : c)
+      : history;
+
+    setPending(newPending);
+    setHistory(newHistory);
+    setAC(null);
+    setEditingId(null);
+    setScreen(isInHistory && !isInPending ? "history" : "pending");
+
+    const saves = [saveAppData("pending", newPending)];
+    if (isInHistory) saves.push(saveAppData("history", newHistory));
+
     if (isInHistory) {
-      const updatedCtrl = {...activeControl, verdict: getVerdict(activeControl)};
-      const newHistory  = history.map(c => c.id === updatedCtrl.id ? updatedCtrl : c);
-      setHistory(newHistory);
-      setAC(null);
-      setEditingId(null);
-      setScreen("history");
       setSyncing(true); setSyncError("");
-      // Guardar en AppData primero, luego sincronizar con Sheets
-      saveAppData("history", newHistory)
+      Promise.all(saves)
         .then(() => syncCtrl(updatedCtrl, formats, colors))
-        .then(driveFolderUrl => {
-          if (driveFolderUrl && driveFolderUrl !== updatedCtrl.driveFolderUrl) {
-            const finalCtrl    = {...updatedCtrl, driveFolderUrl};
-            const finalHistory = newHistory.map(c => c.id === finalCtrl.id ? finalCtrl : c);
-            setHistory(finalHistory);
-            return saveAppData("history", finalHistory);
-          }
-        })
         .then(()=>setSyncing(false))
         .catch(e=>{setSyncing(false);setSyncError("Sync: "+e.message);});
     } else {
-      let updated;
-      if (editingId) {
-        updated = pending.map(c => c.id===editingId ? {...activeControl} : c);
-      } else {
-        updated = [activeControl, ...pending];
-      }
-      setPending(updated);
-      setAC(null);
-      setEditingId(null);
-      setScreen("pending");
-      saveAppData("pending", updated).catch(()=>{});
+      Promise.all(saves).catch(()=>{});
     }
   };
 
