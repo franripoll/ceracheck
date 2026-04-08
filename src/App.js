@@ -15,8 +15,10 @@ const sb = async (path, opts={}) => {
       ...(opts.headers||{}),
     },
   });
-  if (res.status === 204) return null;
-  return res.json();
+  if (res.status === 204 || res.status === 201) return null;
+  const text = await res.text();
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { return null; }
 };
 
 // ─── AppData (history, pending, reclamaciones, etc.) ─────────────
