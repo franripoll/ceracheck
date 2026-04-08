@@ -143,69 +143,32 @@ const uploadPhotoToDrive = async (token, folderId, name, dataUrl) => {
   return res.json();
 };
 
-// ─── Apps Script solo para Sheets ────────────────────────────────
-const BACKEND = "https://script.google.com/macros/s/AKfycbw7IhJ6sg_Qm27O-6mU8CAvmNLA95ICP5Mm4EFQjsiGnemLnkkPx7dR6lgO55dSZDZfbw/exec";
+// ─── Sync control ─────────────────────────────────────────────────
+const syncCtrl = async (ctrl, formats, colors) => {
+  const color     = colors.find(c => c.id === ctrl.colorId);
+  const colorName = color ? `${color.serie} ${color.color}` : "Sin color";
 
-const driveApi = async (body) => {
-  const url = `${BACKEND}?payload=${encodeURIComponent(JSON.stringify(body))}`;
-  const res = await fetch(url, { redirect: "follow" });
-  return res.json();
-};
+  // Comprobar si hay fotos nuevas que subir
+  const fotosNuevas = (ctrl.tiles||[]).flatMap(t =>
+    (t.fotos||[]).filter(f => !f.uploaded && f.src?.startsWith("data:"))
+  );
 
-// ─── Conversión control → fila Sheets ────────────────────────────
-const resolveAnchoForSheet = (tile, fmt) => {
-  if (!tile.anchoOpt || tile.anchoOpt==="") return "";
-  if (tile.anchoOpt==="otro") return tile.anchoCustom||"";
-  const base = fmt?.ancho||0;
-  const is375 = fmt?.id==="375x750", is300 = fmt?.id==="300x600";
-  if (tile.anchoOpt==="nominal") return base;
-  if (tile.anchoOpt==="minus1")  return (is375||is300)?base-2:base-1;
-  return (is375||is300)?base-3:base-2;
-};
-const resolveLargoForSheet = (tile, fmt) => {
-  if (!tile.largoOpt || tile.largoOpt==="") return "";
-  if (tile.largoOpt==="otro") return tile.largoCustom||"";
-  const base = fmt?.largo||0;
-  if (tile.largoOpt==="nominal") return base;
-  if (tile.largoOpt==="minus1")  return base-1;
-  return base-2;
-};
-
-const ctrlToRow = (ctrl, formats, colors, driveFolderUrl) => {
-  const fmt   = formats.find(f=>f.id===ctrl.formatId);
-  const color = colors.find(c=>c.id===ctrl.colorId);
-  const row = [
-    ctrl.id,
-    ctrl.date ? new Date(ctrl.date).toLocaleDateString("es-ES") : "",
-    ctrl.proveedor||"",
-    ctrl.referencia||"",
-    ctrl.lote||"",
-    color ? `${color.color}` : "",
-    color ? `${color.serie}` : "",
-    ctrl.colorUso||"",
-    fmt ? `${fmt.label} mm` : "",
-    ctrl.grosor||10,
-    ctrl.tiles?.length||0,
-  ];
-  for (let i=0; i<5; i++) {
-    const t = ctrl.tiles?.[i];
-    if (t) {
-      const planRaw = t.planimetria==="otro"?t.planimetriaCustom:t.planimetria;
-      row.push(t.tone||"", resolveAnchoForSheet(t,fmt), resolveLargoForSheet(t,fmt), planRaw||"", t.planimetriaDir||"", t.rd||"", t.nota||"");
-    } else {
-      row.push("","","","","","","");
+  if (fotosNuevas.length > 0) {
+    const token    = await getGToken();
+    const folderId = await getOrCreateDriveFolder(token, colorName);
+    for (const tile of (ctrl.tiles||[])) {
+      for (const foto of (tile.fotos||[])) {
+        if (!foto.uploaded && foto.src?.startsWith("data:")) {
+          await uploadPhotoToDrive(token, folderId, foto.name||`foto_${Date.now()}.jpg`, foto.src);
+        }
+      }
     }
   }
-  row.push(ctrl.labEspesor||"", ctrl.labManchas?"Sí":"No", driveFolderUrl||"", ctrl.verdict||"", ctrl.labDone?"Sí":"No", ctrl.noMuestras?"Sí":"No");
-  return row;
+
+  return "";
 };
 
 // ─── Sync control ─────────────────────────────────────────────────
-const toBase64 = async (dataUrl) => {
-  const parts = dataUrl.split(",");
-  return { base64: parts[1], mimeType: parts[0].match(/:(.*?);/)[1] };
-};
-
 const syncCtrl = async (ctrl, formats, colors) => {
   const color     = colors.find(c => c.id === ctrl.colorId);
   const colorName = color ? `${color.serie} ${color.color}` : "Sin color";
@@ -235,12 +198,6 @@ const syncCtrl = async (ctrl, formats, colors) => {
     updatedCtrl = {...ctrl, tiles: newTiles};
   }
 
-  // Guardar fila legible en Google Sheets via Apps Script
-  const row = ctrlToRow(updatedCtrl, formats, colors, "");
-  await driveApi({ action:"saveCtrlRow", data:row });
-
-  return updatedCtrl;
-};
 
 const DEFAULT_FORMATS = [
   { id: "1200x1200", label: "1200 × 1200", largo: 1200, ancho: 1200 },
