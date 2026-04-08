@@ -18,6 +18,10 @@ const sb = async (path, opts={}) => {
   if (res.status === 204 || res.status === 201) return null;
   const text = await res.text();
   if (!text) return null;
+  if (res.status >= 400) {
+    console.error("Supabase error:", res.status, path, text);
+    throw new Error(`Supabase ${res.status}: ${text}`);
+  }
   try { return JSON.parse(text); } catch { return null; }
 };
 
