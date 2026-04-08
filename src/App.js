@@ -148,7 +148,7 @@ const BACKEND = "https://script.google.com/macros/s/AKfycbw7IhJ6sg_Qm27O-6mU8CAv
 
 const driveApi = async (body) => {
   const url = `${BACKEND}?payload=${encodeURIComponent(JSON.stringify(body))}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { redirect: "follow" });
   return res.json();
 };
 
